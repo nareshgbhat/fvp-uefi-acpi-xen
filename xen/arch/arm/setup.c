@@ -45,6 +45,8 @@
 #include <asm/procinfo.h>
 #include <asm/setup.h>
 #include <xsm/xsm.h>
+#include <xen/acpi.h>
+#include <asm/acpi.h>
 
 struct bootinfo __initdata bootinfo;
 
@@ -766,7 +768,18 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     setup_mm(fdt_paddr, fdt_size);
 
+    system_state = SYS_STATE_boot;
+
     vm_init();
+
+/*
+ * Parse the ACPI tables for possible boot-time configuration
+ */
+
+#if defined(CONFIG_ACPI) && defined(CONFIG_ARM_64)
+    acpi_boot_table_init();
+#endif
+
     dt_unflatten_host_device_tree();
     dt_irq_xlate = gic_irq_xlate;
 
@@ -832,7 +845,6 @@ void __init start_xen(unsigned long boot_phys_offset,
                 printk("Failed to bring up CPU %u (error %d)\n", i, ret);
         }
     }
-
     printk("Brought up %ld CPUs\n", (long)num_online_cpus());
     /* TODO: smp_cpus_done(); */
 
