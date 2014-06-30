@@ -47,6 +47,7 @@
 #include <xsm/xsm.h>
 #include <xen/acpi.h>
 #include <asm/acpi.h>
+#include <asm-arm/cputype.h>
 
 struct bootinfo __initdata bootinfo;
 
@@ -778,6 +779,10 @@ void __init start_xen(unsigned long boot_phys_offset,
 
 #if defined(CONFIG_ACPI) && defined(CONFIG_ARM_64)
     acpi_boot_table_init();
+
+    /* Get the boot CPU's MPIDR before cpu logical map is built */
+    cpu_logical_map(0) = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
+
     acpi_boot_init();
 #endif
 
