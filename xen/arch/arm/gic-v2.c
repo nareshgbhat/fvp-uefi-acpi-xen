@@ -714,6 +714,270 @@ DT_DEVICE_START(gicv2, "GICv2:", DEVICE_GIC)
         .init = gicv2_init,
 DT_DEVICE_END
 
+#if defined(CONFIG_ARM_64) && defined(CONFIG_ACPI)
+
+#include <xen/acpi.h>
+#include <xen/errno.h>
+#include <xen/vmap.h>
+#include <asm/acpi.h>
+
+/*
+ * Hard code here, we can not get memory size from MADT (but FDT does),
+ * this size can be inferred from GICv2 spec
+ */
+
+#define ACPI_GIC_DIST_MEM_SIZE   0x00010000 // (SZ_64K)
+#define ACPI_GIC_CPU_IF_MEM_SIZE 0x00002000 // (SZ_8K)
+
+static DEFINE_PER_CPU(u64, gic_percpu_cpu_base);
+static cpumask_t gic_acpi_cpu_mask;
+static u64 dist_phy_base;
+
+static int __init
+gic_acpi_parse_madt_cpu(struct acpi_subtable_header *header,
+                        const unsigned long end)
+{
+        struct acpi_madt_generic_interrupt *processor;
+        unsigned int cpu;
+
+        processor = (struct acpi_madt_generic_interrupt *)header;
+
+        if (BAD_MADT_ENTRY(processor, end))
+                return -EINVAL;
+        for_each_possible_cpu(cpu) {
+        /*
+         * FIXME: This condition is failing.
+         * In Xen we first want to bring/initialize the GIC in hypervisor with single CPU
+         * if (processor->mpidr == cpu_logical_map(cpu))
+         */
+                        goto find;
+        }
+
+        printk("\nUnable to find CPU corresponding to GIC CPU entry [mpdir %lx]\n",
+                (long)processor->mpidr);
+
+        return 0;
+
+find:
+        /* Read from APIC table and fill up the GIC variables */
+        gicv2.dbase = processor->redist_base_address;
+        gicv2.cbase = processor->base_address;
+        gicv2.hbase = processor->gich_base_address;
+        gicv2.vbase = processor->gicv_base_address;
+        gicv2_info.maintenance_irq = processor->vgic_maintenance_interrupt;
+
+        /*
+         * Do not validate CPU i/f base, we can still use "Local Interrupt
+         * Controller Address" from MADT header instead.
+         */
+        per_cpu(gic_percpu_cpu_base, cpu) = processor->base_address;
+        cpumask_set_cpu(cpu, &gic_acpi_cpu_mask);
+
+        return 0;
+}
+
+static int __init
+gic_acpi_parse_madt_distributor(struct acpi_subtable_header *header,
+                                const unsigned long end)
+{
+        struct acpi_madt_generic_distributor *dist;
+
+        dist = (struct acpi_madt_generic_distributor *)header;
+
+        if (BAD_MADT_ENTRY(dist, end))
+                return -EINVAL;
+
+        dist_phy_base = dist->base_address;
+
+        return 0;
+}
+
+static int gic_acpi_validate_init(u64 madt_cpu_addr)
+{
+        void __iomem *cpu_base, *dist_base;
+        u64 gic_cpu_base = 0;
+        unsigned int cpu;
+
+        /* Process all GICC entries delivered by MADT */
+        if (!cpumask_empty(&gic_acpi_cpu_mask)) {
+                /*
+                 * If MADT contains at least one GICC entry, it must be BSP
+                 * dedicated.
+                 */
+                if (!cpumask_test_cpu(0, &gic_acpi_cpu_mask)) {
+                        printk("GICC entries exist but unable to find BSP GICC "
+                                "address\n");
+                        goto madt_cpu_base;
+                }
+
+                /*
+                 * There is no support for non-banked GICv1/2 register in ACPI
+                 * spec. All CPU interface addresses have to be the same.
+                 */
+                gic_cpu_base = per_cpu(gic_percpu_cpu_base, 0);
+                for_each_cpu (cpu, &gic_acpi_cpu_mask) {
+                        if (gic_cpu_base != per_cpu(gic_percpu_cpu_base, cpu)) {
+                                printk("GICC addresses are different, no support"
+                                        "for non-banked GICC registers !!!\n");
+                                gic_cpu_base = 0;
+                                goto madt_cpu_base;
+                        }
+                }
+        }
+
+madt_cpu_base:
+        /* If no GICC address provided, use address from MADT header */
+        if (!gic_cpu_base) {
+                if (!madt_cpu_addr) {
+                        printk("Unable to find GICC address\n");
+                        return -EINVAL;
+                }
+
+                printk("Attempt to use Local Interrupt Controller Address"
+                        "as GICC base address\n");
+                gic_cpu_base = madt_cpu_addr;
+        }
+
+        cpu_base = ioremap(gic_cpu_base, ACPI_GIC_CPU_IF_MEM_SIZE);
+        if (!cpu_base) {
+                printk("Unable to map GICC registers\n");
+                return -ENOMEM;
+        }
+
+        dist_base = ioremap(dist_phy_base, ACPI_GIC_DIST_MEM_SIZE);
+        if (!dist_base) {
+                printk("Unable to map GICD registers\n");
+                iounmap(cpu_base);
+                return -ENOMEM;
+        }
+
+        /*
+         * FIXME: Initialize zero GIC instance (no multi-GIC support) based on
+         * addresses obtained from MADT. Also, set GIC as default IRQ domain
+         * to allow for GSI registration and GSI to IRQ number translation
+         * (see acpi_register_gsi() and acpi_gsi_to_irq()).
+         *
+         * gic_init_bases(0, -1, dist_base, cpu_base, 0, NULL);
+         * irq_set_default_host(gic_data[0].domain);
+         */
+
+        /* TODO: Add check on distributor, cpu size */
+
+       printk("GIC initialization from ACPI MADT table :\n"
+              "        gic_dist_addr=%"PRIpaddr"\n"
+              "        gic_cpu_addr=%"PRIpaddr"\n"
+              "        gic_hyp_addr=%"PRIpaddr"\n"
+              "        gic_vcpu_addr=%"PRIpaddr"\n"
+              "        gic_maintenance_irq=%u\n",
+              gicv2.dbase, gicv2.cbase, gicv2.hbase, gicv2.vbase,
+              gicv2_info.maintenance_irq);
+
+    if ( (gicv2.dbase & ~PAGE_MASK) || (gicv2.cbase & ~PAGE_MASK) ||
+         (gicv2.hbase & ~PAGE_MASK) || (gicv2.vbase & ~PAGE_MASK) )
+        panic("GICv2 interfaces not page aligned");
+
+    gicv2.map_dbase = ioremap_nocache(gicv2.dbase, PAGE_SIZE);
+    if ( !gicv2.map_dbase )
+        panic("GICv2: Failed to ioremap for GIC distributor\n");
+
+    gicv2.map_cbase[0] = ioremap_nocache(gicv2.cbase, PAGE_SIZE);
+
+    if ( platform_has_quirk(PLATFORM_QUIRK_GIC_64K_STRIDE) )
+        gicv2.map_cbase[1] = ioremap_nocache(gicv2.cbase + PAGE_SIZE * 0x10,
+                                           PAGE_SIZE);
+    else
+        gicv2.map_cbase[1] = ioremap_nocache(gicv2.cbase + PAGE_SIZE, PAGE_SIZE);
+
+    if ( !gicv2.map_cbase[0] || !gicv2.map_cbase[1] )
+        panic("GICv2: Failed to ioremap for GIC CPU interface\n");
+
+    gicv2.map_hbase = ioremap_nocache(gicv2.hbase, PAGE_SIZE);
+    if ( !gicv2.map_hbase )
+        panic("GICv2: Failed to ioremap for GIC Virtual interface\n");
+
+    /* Global settings: interrupt distributor */
+    spin_lock_init(&gicv2.lock);
+    spin_lock(&gicv2.lock);
+
+    gicv2_dist_init();
+    gicv2_cpu_init();
+    gicv2_hyp_init();
+
+    spin_unlock(&gicv2.lock);
+
+    gicv2_info.hw_version = GIC_V2;
+    register_gic_ops(&gicv2_ops);
+
+    return 0;
+}
+
+int __init
+gic_v2_acpi_init(struct acpi_table_header *table)
+{
+        struct acpi_table_madt *madt;
+        int count;
+
+        /* Collect CPU base addresses */
+        count = acpi_parse_entries(sizeof(struct acpi_table_madt),
+                                   gic_acpi_parse_madt_cpu, table,
+                                   ACPI_MADT_TYPE_GENERIC_INTERRUPT,
+                                   MAX_GIC_CPU_INTERFACE);
+        if (count <= 0) {
+                printk("Error during GICC entries parsing\n");
+                return -EINVAL;
+        }
+
+        /*
+         * Find distributor base address. We expect one distributor entry since
+         * ACPI 5.0 spec neither support multi-GIC instances nor GIC cascade.
+         */
+        count = acpi_parse_entries(sizeof(struct acpi_table_madt),
+                                   gic_acpi_parse_madt_distributor, table,
+                                   ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR,
+                                   MAX_GIC_DISTRIBUTOR);
+        if (count <= 0) {
+                printk("Error during GICD entries parsing\n");
+                return -EINVAL;
+        }
+
+        madt = (struct acpi_table_madt *)table;
+        return gic_acpi_validate_init((u64)madt->address);
+}
+
+static int __init acpi_parse_madt(struct acpi_table_header *table)
+{
+        struct acpi_table_madt *madt = NULL;
+        madt = (struct acpi_table_madt *)table;
+
+        if (!madt)
+                return 1;
+        else
+                printk("Local APIC address 0x%08x\n", madt->address);
+
+        return 0;
+}
+
+int __init acpi_gic_init()
+{
+       acpi_status status;
+       int err;
+
+       status = acpi_table_parse(ACPI_SIG_MADT, acpi_parse_madt);
+
+       if (ACPI_FAILURE(status)) {
+               const char *msg = acpi_format_exception(status);
+               printk("\nFailed to get MADT table, %s\n", msg);
+               return 1;
+       }
+
+       err = acpi_table_parse(ACPI_SIG_MADT, gic_v2_acpi_init);
+       if (err)
+             printk("\nFailed to initialize GIC IRQ controller\n");
+
+       return 0;
+}
+#endif
+
 /*
  * Local variables:
  * mode: C

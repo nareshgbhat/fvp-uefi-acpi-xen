@@ -27,6 +27,7 @@
 
 #include <asm/gic.h>
 #include <asm/vgic.h>
+#include <asm/acpi.h>
 
 static unsigned int local_irqs_type[NR_LOCAL_IRQS];
 static DEFINE_SPINLOCK(local_irqs_type_lock);
@@ -112,6 +113,14 @@ void __init init_IRQ(void)
     for ( irq = 0; irq < NR_LOCAL_IRQS; irq++ )
         local_irqs_type[irq] = DT_IRQ_TYPE_INVALID;
     spin_unlock(&local_irqs_type_lock);
+
+#if defined(CONFIG_ARM_64) && defined(CONFIG_ACPI)
+   /*
+    * FIXME: MADT presence is needed for UP scenario, otherwise there is
+    * no info for GIC initialization.
+    */
+    acpi_gic_init();
+#endif
 
     BUG_ON(init_local_irq_data() < 0);
     BUG_ON(init_irq_data() < 0);
