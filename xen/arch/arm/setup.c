@@ -803,7 +803,12 @@ void __init start_xen(unsigned long boot_phys_offset,
     smp_init_cpus();
     cpus = smp_get_max_cpus();
 
+/* Comment for now take it after GIC initialization */
+#if defined(CONFIG_ACPI) && defined(CONFIG_ARM_64)
+   init_xen_acpi_time();
+#else
     init_xen_time();
+#endif
 
     gic_init();
 
@@ -819,6 +824,7 @@ void __init start_xen(unsigned long boot_phys_offset,
     xsm_dt_init();
 
     init_maintenance_interrupt();
+
     init_timer_interrupt();
 
     timer_init();
