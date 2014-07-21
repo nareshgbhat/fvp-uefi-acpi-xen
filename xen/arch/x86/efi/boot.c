@@ -510,6 +510,70 @@ char * __init truncate_string(char *s)
     return(NULL);
 }
 
+bool_t __init read_config_file(EFI_FILE_HANDLE *cfg_dir_handle,
+                             struct file *cfg, CHAR16 *cfg_file_name,
+                             union string *section,
+                             CHAR16 *xen_file_name)
+{
+    /*
+     * This allocation is internal to the EFI stub, so any address is
+     * fine.
+     */
+    EFI_PHYSICAL_ADDRESS max = ~0;
+
+    /* Read and parse the config file. */
+    if ( !cfg_file_name )
+    {
+        CHAR16 *tail;
+
+        while ( (tail = point_tail(xen_file_name)) != NULL )
+        {
+            wstrcpy(tail, L".cfg");
+            if ( read_file(*cfg_dir_handle, xen_file_name, cfg, max) )
+                break;
+            *tail = 0;
+        }
+        if ( !tail )
+            return 0;
+        PrintStr(L"Using configuration file '");
+        PrintStr(xen_file_name);
+        PrintStr(L"'\r\n");
+    }
+    else if ( !read_file(*cfg_dir_handle, cfg_file_name, cfg, max) )
+        return 0;
+    pre_parse(cfg);
+
+    if ( section->w )
+        w2s(section);
+    else
+        section->s = get_value(cfg, "global", "default");
+
+
+    for ( ; ; )
+    {
+        union string dom0_kernel_name;
+        dom0_kernel_name.s = get_value(cfg, section->s, "kernel");
+        if ( dom0_kernel_name.s )
+            break;
+        dom0_kernel_name.s = get_value(cfg, "global", "chain");
+        if ( !dom0_kernel_name.s )
+            break;
+        efi_bs->FreePages(cfg->addr, PFN_UP(cfg->size));
+        cfg->addr = 0;
+        if ( !read_file(*cfg_dir_handle, s2w(&dom0_kernel_name), cfg, max) )
+        {
+            PrintStr(L"Chained configuration file '");
+            PrintStr(dom0_kernel_name.w);
+            efi_bs->FreePool(dom0_kernel_name.w);
+            PrintStr(L"'not found.");
+            return 0;
+        }
+        pre_parse(cfg);
+        efi_bs->FreePool(dom0_kernel_name.w);
+    }
+    return 1;
+}
+
 static void __init edd_put_string(u8 *dst, size_t n, const char *src)
 {
     while ( n-- && *src )
@@ -722,8 +786,6 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     u64 efer;
     bool_t base_video = 0;
     bool_t load_ok = 0;
-    EFI_PHYSICAL_ADDRESS max_addr = min(1UL << (32 + PAGE_SHIFT),
-                                   HYPERVISOR_VIRT_END - DIRECTMAP_VIRT_START);
 
     efi_ih = ImageHandle;
     efi_bs = SystemTable->BootServices;
@@ -855,53 +917,11 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     if ( EFI_ERROR(status) )
         gop = NULL;
 
-    /* Read and parse the config file. */
-    if ( !cfg_file_name )
-    {
-        CHAR16 *tail;
+    if ( !read_config_file(&dir_handle, &cfg, cfg_file_name, &section,
+                           file_name) )
+        blexit(L"Unable to read configuration file.");
 
-        while ( (tail = point_tail(file_name)) != NULL )
-        {
-            wstrcpy(tail, L".cfg");
-            if ( read_file(dir_handle, file_name, &cfg, max_addr) )
-                break;
-            *tail = 0;
-        }
-        if ( !tail )
-            blexit(L"No configuration file found.");
-        PrintStr(L"Using configuration file '");
-        PrintStr(file_name);
-        PrintStr(L"'\r\n");
-    }
-    else if ( !read_file(dir_handle, cfg_file_name, &cfg, max_addr) )
-        blexit(L"Configuration file not found.");
-    pre_parse(&cfg);
-
-    if ( section.w )
-        w2s(&section);
-    else
-        section.s = get_value(&cfg, "global", "default");
-
-    for ( ; ; )
-    {
-        name.s = get_value(&cfg, section.s, "kernel");
-        if ( name.s )
-            break;
-        name.s = get_value(&cfg, "global", "chain");
-        if ( !name.s )
-            break;
-        efi_bs->FreePages(cfg.addr, PFN_UP(cfg.size));
-        cfg.addr = 0;
-        if ( !read_file(dir_handle, s2w(&name), &cfg, max_addr) )
-        {
-            PrintStr(L"Chained configuration file '");
-            PrintStr(name.w);
-            efi_bs->FreePool(name.w);
-            blexit(L"'not found.");
-        }
-        pre_parse(&cfg);
-        efi_bs->FreePool(name.w);
-    }
+    name.s = get_value(&cfg, section.s, "kernel");
     if ( !name.s )
         blexit(L"No Dom0 kernel image specified.");
     place_string(&mb_modules[mbi.mods_count].string, name.s);
