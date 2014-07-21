@@ -175,7 +175,8 @@ static void __init place_string(u32 *addr, const char *s)
 }
 
 static unsigned int __init get_argv(unsigned int argc, CHAR16 **argv,
-                                    CHAR16 *cmdline, UINTN cmdsize)
+                                    CHAR16 *cmdline, UINTN cmdsize,
+                                    CHAR16 **cmdline_remain)
 {
     CHAR16 *ptr = (CHAR16 *)(argv + argc + 1), *prev = NULL;
     bool_t prev_sep = TRUE;
@@ -201,10 +202,9 @@ static unsigned int __init get_argv(unsigned int argc, CHAR16 **argv,
                 ++argc;
             else if ( prev && wstrcmp(prev, L"--") == 0 )
             {
-                union string rest = { .w = cmdline };
-
                 --argv;
-                place_string(&mbi.cmdline, w2s(&rest));
+                if (**cmdline_remain)
+                    *cmdline_remain = cmdline;
                 break;
             }
             else
@@ -747,7 +747,8 @@ static void __init relocate_image(unsigned long delta)
 
 bool_t __init handle_cmdline(EFI_LOADED_IMAGE *loaded_image,
                            CHAR16 **cfg_file_name, bool_t *base_video,
-                           CHAR16 **image_name, CHAR16 **section_name)
+                           CHAR16 **image_name, CHAR16 **section_name,
+                           CHAR16 **cmdline_remain)
 {
 
     unsigned int i, argc;
@@ -761,14 +762,14 @@ bool_t __init handle_cmdline(EFI_LOADED_IMAGE *loaded_image,
     }
 
     argc = get_argv(0, NULL, loaded_image->LoadOptions,
-                    loaded_image->LoadOptionsSize);
+                    loaded_image->LoadOptionsSize, NULL);
     if ( argc > 0 &&
          efi_bs->AllocatePool(EfiLoaderData,
                               (argc + 1) * sizeof(*argv) +
                                   loaded_image->LoadOptionsSize,
                               (void **)&argv) == EFI_SUCCESS )
         get_argv(argc, argv, loaded_image->LoadOptions,
-                 loaded_image->LoadOptionsSize);
+                 loaded_image->LoadOptionsSize, cmdline_remain);
     else
         argc = 0;
 
@@ -844,6 +845,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     unsigned int i;
     CHAR16 *file_name = NULL, *cfg_file_name = NULL, *image_name = NULL;
     CHAR16 *section_name = NULL;
+    union string cmdline = { NULL };
     UINTN cols, rows, depth, size, map_key, info_size, gop_mode = ~0;
     EFI_HANDLE *handles = NULL;
     EFI_SHIM_LOCK_PROTOCOL *shim_lock;
@@ -884,8 +886,11 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     dir_handle = get_parent_handle(loaded_image, &file_name);
 
     if ( !handle_cmdline(loaded_image, &cfg_file_name, &base_video, &image_name,
-                   &section_name) )
+                   &section_name, &cmdline.w) )
         blexit(NULL);
+
+    if (cmdline.w)
+        place_string(&mbi.cmdline, w2s(&cmdline));
 
     section.w = section_name;
 
