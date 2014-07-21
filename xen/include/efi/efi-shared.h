@@ -36,6 +36,28 @@ CHAR16 *__init s2w(union string *str);
 char *__init w2s(const union string *str);
 bool_t __init match_guid(const EFI_GUID *guid1, const EFI_GUID *guid2);
 
+void __init PrintErrMesg(const CHAR16 *mesg, EFI_STATUS ErrCode);
+EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
+                                         CHAR16 **leaf);
+CHAR16 *__init point_tail(CHAR16 *fn);
+bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
+                               struct file *file, EFI_PHYSICAL_ADDRESS max_addr);
+void __init pre_parse(const struct file *cfg);
+char *__init get_value(const struct file *cfg, const char *section,
+                       const char *item);
+
+char * __init truncate_string(char *s);
+
+bool_t __init read_config_file(EFI_FILE_HANDLE *cfg_dir_handle,
+                             struct file *cfg, CHAR16 *cfg_file_name,
+                             union string *section,
+                             CHAR16 *xen_file_name);
+unsigned int __init get_argv(unsigned int argc, CHAR16 **argv, CHAR16 *cmdline,
+                             UINTN cmdsize, CHAR16 **cmdline_remain);
+bool_t __init handle_cmdline(EFI_LOADED_IMAGE *loaded_image,
+                           CHAR16 **cfg_file_name, bool_t *base_video,
+                           CHAR16 **image_name, CHAR16 **section_name,
+                           CHAR16 **cmdline_remain);
 #endif
 
 
