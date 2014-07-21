@@ -92,7 +92,7 @@ static void __init noreturn blexit(const CHAR16 *str)
 }
 
 /* generic routine for printing error messages */
-static void __init PrintErrMesg(const CHAR16 *mesg, EFI_STATUS ErrCode)
+void __init PrintErrMesg(const CHAR16 *mesg, EFI_STATUS ErrCode)
 {
     StdOut = StdErr;
     PrintErr((CHAR16 *)mesg);
@@ -139,6 +139,12 @@ static void __init PrintErrMesg(const CHAR16 *mesg, EFI_STATUS ErrCode)
         mesg = NULL;
         break;
     }
+}
+
+/* generic routine for printing error messages */
+static void __init PrintErrMesgExit(const CHAR16 *mesg, EFI_STATUS ErrCode)
+{
+    PrintErrMesg(mesg, ErrCode);
     blexit(mesg);
 }
 
@@ -231,12 +237,12 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
         ret = efi_bs->HandleProtocol(loaded_image->DeviceHandle,
                                      &fs_protocol, (void **)&fio);
         if ( EFI_ERROR(ret) )
-            PrintErrMesg(L"Couldn't obtain the File System Protocol Interface",
+            PrintErrMesgExit(L"Couldn't obtain the File System Protocol Interface",
                          ret);
         ret = fio->OpenVolume(fio, &dir_handle);
     } while ( ret == EFI_MEDIA_CHANGED );
     if ( ret != EFI_SUCCESS )
-        PrintErrMesg(L"OpenVolume failure", ret);
+        PrintErrMesgExit(L"OpenVolume failure", ret);
 
 #define buffer ((CHAR16 *)keyhandler_scratch)
 #define BUFFERSIZE sizeof(keyhandler_scratch)
@@ -259,7 +265,7 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
             if ( ret != EFI_SUCCESS )
             {
                 PrintErr(L"Open failed for ");
-                PrintErrMesg(buffer, ret);
+                PrintErrMesgExit(buffer, ret);
             }
             dir_handle->Close(dir_handle);
             dir_handle = new_handle;
@@ -286,7 +292,7 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
                                    EFI_FILE_MODE_READ, 0);
             if ( ret != EFI_SUCCESS ) {
                 PrintErr(L"Open failed for ");
-                PrintErrMesg(buffer, ret);
+                PrintErrMesgExit(buffer, ret);
             }
             dir_handle->Close(dir_handle);
             dir_handle = new_handle;
@@ -326,7 +332,7 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
     CHAR16 *what = NULL;
 
     if ( !name )
-        PrintErrMesg(L"No filename", EFI_OUT_OF_RESOURCES);
+        PrintErrMesgExit(L"No filename", EFI_OUT_OF_RESOURCES);
     ret = dir_handle->Open(dir_handle, &FileHandle, name,
                            EFI_FILE_MODE_READ, 0);
     if ( file == &cfg && ret == EFI_NOT_FOUND )
@@ -387,7 +393,7 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
     {
         PrintErr(what);
         PrintErr(L" failed for ");
-        PrintErrMesg(name, ret);
+        PrintErrMesgExit(name, ret);
     }
 
     return 1;
@@ -466,7 +472,7 @@ static void __init edd_put_string(u8 *dst, size_t n, const char *src)
     while ( n-- && *src )
        *dst++ = *src++;
     if ( *src )
-       PrintErrMesg(L"Internal error populating EDD info",
+       PrintErrMesgExit(L"Internal error populating EDD info",
                     EFI_BUFFER_TOO_SMALL);
     while ( n-- )
        *dst++ = ' ';
@@ -688,7 +694,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     status = efi_bs->HandleProtocol(ImageHandle, &loaded_image_guid,
                                     (void **)&loaded_image);
     if ( status != EFI_SUCCESS )
-        PrintErrMesg(L"No Loaded Image Protocol", status);
+        PrintErrMesgExit(L"No Loaded Image Protocol", status);
 
     xen_phys_start = (UINTN)loaded_image->ImageBase;
     if ( (xen_phys_start + loaded_image->ImageSize - 1) >> 32 )
@@ -856,7 +862,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     if ( !EFI_ERROR(efi_bs->LocateProtocol(&shim_lock_guid, NULL,
                     (void **)&shim_lock)) &&
          (status = shim_lock->Verify(kernel.ptr, kernel.size)) != EFI_SUCCESS )
-        PrintErrMesg(L"Dom0 kernel image could not be verified", status);
+        PrintErrMesgExit(L"Dom0 kernel image could not be verified", status);
 
     name.s = get_value(&cfg, section.s, "ramdisk");
     if ( name.s )
@@ -1277,7 +1283,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     status = efi_bs->GetMemoryMap(&efi_memmap_size, efi_memmap, &map_key,
                                   &efi_mdesc_size, &mdesc_ver);
     if ( EFI_ERROR(status) )
-        PrintErrMesg(L"Cannot obtain memory map", status);
+        PrintErrMesgExit(L"Cannot obtain memory map", status);
 
     /* Populate E820 table and check trampoline area availability. */
     e = e820map - 1;
@@ -1337,7 +1343,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     status = efi_bs->ExitBootServices(ImageHandle, map_key);
     if ( EFI_ERROR(status) )
-        PrintErrMesg(L"Cannot exit boot services", status);
+        PrintErrMesgExit(L"Cannot exit boot services", status);
 
     /* Adjust pointers into EFI. */
     efi_ct = (void *)efi_ct + DIRECTMAP_VIRT_START;
