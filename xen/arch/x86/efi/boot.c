@@ -237,12 +237,18 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
         ret = efi_bs->HandleProtocol(loaded_image->DeviceHandle,
                                      &fs_protocol, (void **)&fio);
         if ( EFI_ERROR(ret) )
-            PrintErrMesgExit(L"Couldn't obtain the File System Protocol Interface",
+        {
+            PrintErrMesg(L"Couldn't obtain the File System Protocol Interface",
                          ret);
+            return NULL;
+        }
         ret = fio->OpenVolume(fio, &dir_handle);
     } while ( ret == EFI_MEDIA_CHANGED );
     if ( ret != EFI_SUCCESS )
-        PrintErrMesgExit(L"OpenVolume failure", ret);
+    {
+        PrintErrMesg(L"OpenVolume failure", ret);
+        return NULL;
+    }
 
 #define buffer ((CHAR16 *)keyhandler_scratch)
 #define BUFFERSIZE sizeof(keyhandler_scratch)
@@ -254,7 +260,10 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
 
         if ( DevicePathType(dp) != MEDIA_DEVICE_PATH ||
              DevicePathSubType(dp) != MEDIA_FILEPATH_DP )
-            blexit(L"Unsupported device path component");
+        {
+            PrintErr(L"Unsupported device path component");
+            return NULL;
+        }
 
         if ( *buffer )
         {
@@ -265,7 +274,8 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
             if ( ret != EFI_SUCCESS )
             {
                 PrintErr(L"Open failed for ");
-                PrintErrMesgExit(buffer, ret);
+                PrintErrMesg(buffer, ret);
+                return NULL;
             }
             dir_handle->Close(dir_handle);
             dir_handle = new_handle;
@@ -273,7 +283,10 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
         fp = (void *)dp;
         if ( BUFFERSIZE < DevicePathNodeLength(dp) -
                           sizeof(*dp) + sizeof(*buffer) )
-            blexit(L"Increase BUFFERSIZE");
+        {
+            PrintErr(L"Increase BUFFERSIZE");
+            return NULL;
+        }
         memcpy(buffer, fp->PathName, DevicePathNodeLength(dp) - sizeof(*dp));
         buffer[(DevicePathNodeLength(dp) - sizeof(*dp)) / sizeof(*buffer)] = 0;
     }
@@ -292,7 +305,8 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
                                    EFI_FILE_MODE_READ, 0);
             if ( ret != EFI_SUCCESS ) {
                 PrintErr(L"Open failed for ");
-                PrintErrMesgExit(buffer, ret);
+                PrintErrMesg(buffer, ret);
+                return NULL;
             }
             dir_handle->Close(dir_handle);
             dir_handle = new_handle;
@@ -705,6 +719,9 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     /* Get the file system interface. */
     dir_handle = get_parent_handle(loaded_image, &file_name);
+
+    if ( !dir_handle )
+        blexit(L"EFI get_parent_handle failed.");
 
     argc = get_argv(0, NULL, loaded_image->LoadOptions,
                     loaded_image->LoadOptionsSize);
