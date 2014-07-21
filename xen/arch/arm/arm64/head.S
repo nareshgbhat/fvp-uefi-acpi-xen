@@ -24,6 +24,8 @@
 #include <asm/page.h>
 #include <asm/asm_defns.h>
 #include <asm/early_printk.h>
+#include <efi/efierr.h>
+#include <asm/arm64/efibind.h>
 
 #define PT_PT     0xf7f /* nG=1 AF=1 SH=11 AP=01 NS=1 ATTR=111 T=1 P=1 */
 #define PT_MEM    0xf7d /* nG=1 AF=1 SH=11 AP=01 NS=1 ATTR=111 T=0 P=1 */
@@ -85,7 +87,6 @@
 #endif /* !CONFIG_EARLY_PRINTK */
 
         /*.aarch64*/
-
         /*
          * Kernel startup entry point.
          * ---------------------------
@@ -101,11 +102,22 @@
          */
 
 GLOBAL(start)
+#ifdef CONFIG_EFI_STUB
         /*
          * DO NOT MODIFY. Image header expected by Linux boot-loaders.
          */
-        b       real_start           /* branch to kernel start, magic */
+efi_head:
+        /*
+         * This add instruction has no meaningful effect except that
+         * its opcode forms the magic "MZ" signature of a PE/COFF file
+         * that is required for UEFI applications.
+         */
+        add     x13, x18, #0x16
+        b       real_start           /* branch to kernel start */
+#else
+        b       real_start           /* branch to kernel start */
         .long   0                    /* reserved */
+#endif
         .quad   0                    /* Image load offset from start of RAM */
         .quad   0                    /* reserved */
         .quad   0                    /* reserved */
@@ -116,7 +128,119 @@ GLOBAL(start)
         .byte   0x52
         .byte   0x4d
         .byte   0x64
+#ifdef CONFIG_EFI_STUB
+        .long   pe_header - efi_head        /* Offset to the PE header. */
+#else
         .word   0                    /* reserved */
+#endif
+
+#ifdef CONFIG_EFI_STUB
+        /*
+         * Add the PE/COFF header to the file.  The address of this header
+         * is at offset 0x3c in the file, and is part of Linux "Image"
+         * header.  The arm64 Linux Image format is designed to support
+         * being both an 'Image' format binary and a PE/COFF binary.
+         * The PE/COFF format is defined by Microsoft, and is available
+         * from: http://msdn.microsoft.com/en-us/gg463119.aspx
+         * Version 8.3 adds support for arm64 and UEFI usage.
+         */
+
+        .align  3
+pe_header:
+        .ascii  "PE"
+        .short  0
+coff_header:
+        .short  0xaa64                          /* AArch64 */
+        .short  2                               /* nr_sections */
+        .long   0                               /* TimeDateStamp */
+        .long   0                               /* PointerToSymbolTable */
+        .long   1                               /* NumberOfSymbols */
+        .short  section_table - optional_header /* SizeOfOptionalHeader */
+        .short  0x206                           /* Characteristics. */
+                                                /* IMAGE_FILE_DEBUG_STRIPPED | */
+                                                /* IMAGE_FILE_EXECUTABLE_IMAGE | */
+                                                /* IMAGE_FILE_LINE_NUMS_STRIPPED */
+optional_header:
+        .short  0x20b                           /* PE32+ format */
+        .byte   0x02                            /* MajorLinkerVersion */
+        .byte   0x14                            /* MinorLinkerVersion */
+        .long   _end - real_start               /* SizeOfCode */
+        .long   0                               /* SizeOfInitializedData */
+        .long   0                               /* SizeOfUninitializedData */
+        .long   efi_stub_entry - efi_head       /* AddressOfEntryPoint */
+        .long   real_start - efi_head           /* BaseOfCode */
+
+extra_header_fields:
+        .quad   0                               /* ImageBase */
+        .long   0x200000                        /* SectionAlignment (2MByte) */
+        .long   0x8                             /* FileAlignment */
+        .short  0                               /* MajorOperatingSystemVersion */
+        .short  0                               /* MinorOperatingSystemVersion */
+        .short  0                               /* MajorImageVersion */
+        .short  0                               /* MinorImageVersion */
+        .short  0                               /* MajorSubsystemVersion */
+        .short  0                               /* MinorSubsystemVersion */
+        .long   0                               /* Win32VersionValue */
+
+        .long   _end - efi_head                 /* SizeOfImage */
+
+        /* Everything before the kernel image is considered part of the header */
+        .long   real_start - efi_head           /* SizeOfHeaders */
+        .long   0                               /* CheckSum */
+        .short  0xa                             /* Subsystem (EFI application) */
+        .short  0                               /* DllCharacteristics */
+        .quad   0                               /* SizeOfStackReserve */
+        .quad   0                               /* SizeOfStackCommit */
+        .quad   0                               /* SizeOfHeapReserve */
+        .quad   0                               /* SizeOfHeapCommit */
+        .long   0                               /* LoaderFlags */
+        .long   0x6                             /* NumberOfRvaAndSizes */
+
+        .quad   0                               /* ExportTable */
+        .quad   0                               /* ImportTable */
+        .quad   0                               /* ResourceTable */
+        .quad   0                               /* ExceptionTable */
+        .quad   0                               /* CertificationTable */
+        .quad   0                               /* BaseRelocationTable */
+
+        /* Section table */
+section_table:
+
+        /*
+         * The EFI application loader requires a relocation section
+         * because EFI applications must be relocatable.  This is a
+         * dummy section as far as we are concerned.
+         */
+        .ascii  ".reloc"
+        .byte   0
+        .byte   0                               /* end of 0 padding of section name */
+        .long   0
+        .long   0
+        .long   0                               /* SizeOfRawData */
+        .long   0                               /* PointerToRawData */
+        .long   0                               /* PointerToRelocations */
+        .long   0                               /* PointerToLineNumbers */
+        .short  0                               /* NumberOfRelocations */
+        .short  0                               /* NumberOfLineNumbers */
+        .long   0x42100040                      /* Characteristics (section flags) */
+
+
+        .ascii  ".text"
+        .byte   0
+        .byte   0
+        .byte   0                               /* end of 0 padding of section name */
+        .long   _end - real_start               /* VirtualSize */
+        .long   real_start - efi_head           /* VirtualAddress */
+        .long   __init_end_efi - real_start     /* SizeOfRawData */
+        .long   real_start - efi_head           /* PointerToRawData */
+
+        .long   0                /* PointerToRelocations (0 for executables) */
+        .long   0                /* PointerToLineNumbers (0 for executables) */
+        .short  0                /* NumberOfRelocations  (0 for executables) */
+        .short  0                /* NumberOfLineNumbers  (0 for executables) */
+        .long   0xe0500020       /* Characteristics (section flags) */
+        .align  5
+#endif
 
 real_start:
         msr   DAIFSet, 0xf           /* Disable all interrupts */
@@ -617,6 +741,59 @@ putn:   ret
 ENTRY(lookup_processor_type)
         mov  x0, #0
         ret
+
+
+
+ENTRY(efi_stub_entry)
+        stp   x29, x30, [sp, #-32]!
+
+        /*
+         * Call efi_entry to do the real work.
+         * x0 and x1 are already set up by firmware.
+         * EFI mandates a 1:1 (unity) VA->PA mapping,
+         * so we can turn off the MMU before entering
+         * XEN.
+         *
+         * unsigned long efi_entry(EFI_HANDLE handle,
+         *                             EFI_SYSTEM_TABLE *sys_table);
+         */
+
+        bl    efi_entry
+        cmp   x0, EFI_STUB_ERROR
+        b.eq  efi_load_fail
+
+        /*
+         * efi_entry() will return here with device tree address in x0.
+         *  Save value in register which is preserved by __flush_dcache_all.
+         */
+
+
+        mov   x20, x0
+        bl    __flush_dcache_all
+        ic      ialluis
+
+        /* Turn off Dcache and MMU */
+        mrs   x0, sctlr_el2
+        bic   x0, x0, #1 << 0        /* clear SCTLR.M */
+        bic   x0, x0, #1 << 2        /* clear SCTLR.C */
+        msr   sctlr_el2, x0
+        isb
+
+        /* Jump to XEN entry point */
+        mov   x0, x20
+        mov   x1, xzr
+        mov   x2, xzr
+        mov   x3, xzr
+        b     real_start
+
+efi_load_fail:
+        mov   x0, #EFI_LOAD_ERROR
+        ldp   x29, x30, [sp], #32
+        ret
+
+ENDPROC(efi_stub_entry)
+
+
 
 /*
  * Local variables:

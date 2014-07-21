@@ -1,5 +1,6 @@
 subdir-$(arm32) += arm32
 subdir-$(arm64) += arm64
+subdir-$(EFI) += efi
 subdir-y += platforms
 
 obj-$(EARLY_PRINTK) += early_printk.o
@@ -36,6 +37,10 @@ obj-y += decode.o
 obj-y += processor.o
 
 #obj-bin-y += ....o
+
+ifeq ($(EFI),y)
+AFLAGS += -DCONFIG_EFI_STUB
+endif
 
 ifdef CONFIG_DTB_FILE
 obj-y += dtb.o

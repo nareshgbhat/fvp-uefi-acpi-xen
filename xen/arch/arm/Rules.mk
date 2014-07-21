@@ -31,6 +31,7 @@ CFLAGS += -mcpu=generic
 CFLAGS += -mgeneral-regs-only # No fp registers etc
 arm32 := n
 arm64 := y
+EFI := y
 endif
 
 ifneq ($(call cc-option,$(CC),-fvisibility=hidden,n),n)
