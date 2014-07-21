@@ -466,7 +466,13 @@ static char *__init get_value(const struct file *cfg, const char *section,
             break;
         default:
             if ( match && strncmp(ptr, item, ilen) == 0 && ptr[ilen] == '=' )
-                return ptr + ilen + 1;
+            {
+                ptr += ilen + 1;
+                /* strip off any leading spaces */
+                while ( *ptr && isspace(*ptr) )
+                    ptr++;
+                return ptr;
+            }
             break;
         }
         ptr += strlen(ptr);
@@ -489,14 +495,19 @@ bool_t __init load_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
     return 0;
 }
 
-static void __init split_value(char *s)
+/* Truncate string at first space, and return pointer
+ * to remainder of string.
+ */
+char * __init truncate_string(char *s)
 {
-    while ( *s && isspace(*s) )
-        ++s;
-    place_string(&mb_modules[mbi.mods_count].string, s);
     while ( *s && !isspace(*s) )
         ++s;
-    *s = 0;
+    if (*s)
+    {
+        *s = 0;
+        return(s + 1);
+    }
+    return(NULL);
 }
 
 static void __init edd_put_string(u8 *dst, size_t n, const char *src)
@@ -893,7 +904,8 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     }
     if ( !name.s )
         blexit(L"No Dom0 kernel image specified.");
-    split_value(name.s);
+    place_string(&mb_modules[mbi.mods_count].string, name.s);
+    truncate_string(name.s);
     load_ok = load_file(dir_handle, s2w(&name), &kernel);
     efi_bs->FreePool(name.w);
     if ( !load_ok )
@@ -907,7 +919,8 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     name.s = get_value(&cfg, section.s, "ramdisk");
     if ( name.s )
     {
-        split_value(name.s);
+        place_string(&mb_modules[mbi.mods_count].string, name.s);
+        truncate_string(name.s);
         load_ok = load_file(dir_handle, s2w(&name), &ramdisk);
         efi_bs->FreePool(name.w);
         if ( !load_ok )
@@ -920,7 +933,8 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     if ( name.s )
     {
         microcode_set_module(mbi.mods_count);
-        split_value(name.s);
+        place_string(&mb_modules[mbi.mods_count].string, name.s);
+        truncate_string(name.s);
         load_ok = load_file(dir_handle, s2w(&name), &ucode);
         efi_bs->FreePool(name.w);
         if ( !load_ok )
@@ -930,7 +944,8 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     name.s = get_value(&cfg, section.s, "xsm");
     if ( name.s )
     {
-        split_value(name.s);
+        place_string(&mb_modules[mbi.mods_count].string, name.s);
+        truncate_string(name.s);
         load_ok = load_file(dir_handle, s2w(&name), &xsm);
         efi_bs->FreePool(name.w);
         if ( !load_ok )
