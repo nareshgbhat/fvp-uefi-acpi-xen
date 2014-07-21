@@ -338,7 +338,7 @@ static CHAR16 *__init point_tail(CHAR16 *fn)
 }
 
 static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
-                               struct file *file)
+                               struct file *file, EFI_PHYSICAL_ADDRESS max_addr)
 {
     EFI_FILE_HANDLE FileHandle = NULL;
     UINT64 size;
@@ -346,11 +346,14 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
     CHAR16 *what = NULL;
 
     if ( !name )
-        PrintErrMesgExit(L"No filename", EFI_OUT_OF_RESOURCES);
+    {
+        PrintErrMesg(L"No Filename", EFI_OUT_OF_RESOURCES);
+        return 0;
+    }
+
     ret = dir_handle->Open(dir_handle, &FileHandle, name,
                            EFI_FILE_MODE_READ, 0);
-    if ( file == &cfg && ret == EFI_NOT_FOUND )
-        return 0;
+
     if ( EFI_ERROR(ret) )
         what = L"Open";
     else
@@ -367,8 +370,7 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
         what = what ?: L"Seek";
     else
     {
-        file->addr = min(1UL << (32 + PAGE_SHIFT),
-                         HYPERVISOR_VIRT_END - DIRECTMAP_VIRT_START);
+        file->addr = max_addr;
         ret = efi_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData,
                                     PFN_UP(size), &file->addr);
     }
@@ -379,25 +381,17 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
     }
     else
     {
-        if ( file != &cfg )
-        {
-            PrintStr(name);
-            PrintStr(L": ");
-            DisplayUint(file->addr, 2 * sizeof(file->addr));
-            PrintStr(L"-");
-            DisplayUint(file->addr + size, 2 * sizeof(file->addr));
-            PrintStr(newline);
-            mb_modules[mbi.mods_count].mod_start = file->addr >> PAGE_SHIFT;
-            mb_modules[mbi.mods_count].mod_end = size;
-            ++mbi.mods_count;
-        }
 
         file->size = size;
         ret = FileHandle->Read(FileHandle, &file->size, file->ptr);
         if ( !EFI_ERROR(ret) && file->size != size )
             ret = EFI_ABORTED;
         if ( EFI_ERROR(ret) )
-            what = L"Read";
+        {
+            what = what ?: L"Read";
+            efi_bs->FreePages(file->addr, PFN_UP(file->size));
+            file->addr = 0;
+        }
     }
 
     if ( FileHandle )
@@ -405,12 +399,21 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
 
     if ( what )
     {
-        PrintErr(what);
-        PrintErr(L" failed for ");
-        PrintErrMesgExit(name, ret);
+        PrintErrMesg(what, ret);
+        PrintErr(L"Unable to load file");
+        return 0;
+    }
+    else
+    {
+        PrintStr(name);
+        PrintStr(L": ");
+        DisplayUint(file->addr, 2 * sizeof(file->addr));
+        PrintStr(L"-");
+        DisplayUint(file->addr + file->size, 2 * sizeof(file->addr));
+        PrintStr(newline);
+        return 1;
     }
 
-    return 1;
 }
 
 static void __init pre_parse(const struct file *cfg)
@@ -469,6 +472,21 @@ static char *__init get_value(const struct file *cfg, const char *section,
         ptr += strlen(ptr);
     }
     return NULL;
+}
+/* Only call with non-config files. */
+bool_t __init load_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
+                               struct file *file)
+{
+    EFI_PHYSICAL_ADDRESS max = min(1UL << (32 + PAGE_SHIFT),
+                                   HYPERVISOR_VIRT_END - DIRECTMAP_VIRT_START);
+    if ( read_file(dir_handle, name, file, max) )
+    {
+        mb_modules[mbi.mods_count].mod_start = file->addr >> PAGE_SHIFT;
+        mb_modules[mbi.mods_count].mod_end = file->size;
+        ++mbi.mods_count;
+        return 1;
+    }
+    return 0;
 }
 
 static void __init split_value(char *s)
@@ -692,6 +710,9 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     struct e820entry *e;
     u64 efer;
     bool_t base_video = 0;
+    bool_t load_ok = 0;
+    EFI_PHYSICAL_ADDRESS max_addr = min(1UL << (32 + PAGE_SHIFT),
+                                   HYPERVISOR_VIRT_END - DIRECTMAP_VIRT_START);
 
     efi_ih = ImageHandle;
     efi_bs = SystemTable->BootServices;
@@ -831,7 +852,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         while ( (tail = point_tail(file_name)) != NULL )
         {
             wstrcpy(tail, L".cfg");
-            if ( read_file(dir_handle, file_name, &cfg) )
+            if ( read_file(dir_handle, file_name, &cfg, max_addr) )
                 break;
             *tail = 0;
         }
@@ -841,7 +862,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         PrintStr(file_name);
         PrintStr(L"'\r\n");
     }
-    else if ( !read_file(dir_handle, cfg_file_name, &cfg) )
+    else if ( !read_file(dir_handle, cfg_file_name, &cfg, max_addr) )
         blexit(L"Configuration file not found.");
     pre_parse(&cfg);
 
@@ -860,7 +881,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             break;
         efi_bs->FreePages(cfg.addr, PFN_UP(cfg.size));
         cfg.addr = 0;
-        if ( !read_file(dir_handle, s2w(&name), &cfg) )
+        if ( !read_file(dir_handle, s2w(&name), &cfg, max_addr) )
         {
             PrintStr(L"Chained configuration file '");
             PrintStr(name.w);
@@ -873,8 +894,10 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     if ( !name.s )
         blexit(L"No Dom0 kernel image specified.");
     split_value(name.s);
-    read_file(dir_handle, s2w(&name), &kernel);
+    load_ok = load_file(dir_handle, s2w(&name), &kernel);
     efi_bs->FreePool(name.w);
+    if ( !load_ok )
+        blexit(L"Unable to load Dom0 Kernel image.");
 
     if ( !EFI_ERROR(efi_bs->LocateProtocol(&shim_lock_guid, NULL,
                     (void **)&shim_lock)) &&
@@ -885,8 +908,10 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     if ( name.s )
     {
         split_value(name.s);
-        read_file(dir_handle, s2w(&name), &ramdisk);
+        load_ok = load_file(dir_handle, s2w(&name), &ramdisk);
         efi_bs->FreePool(name.w);
+        if ( !load_ok )
+            blexit(L"Unable to load ramdisk image.");
     }
 
     name.s = get_value(&cfg, section.s, "ucode");
@@ -896,16 +921,20 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     {
         microcode_set_module(mbi.mods_count);
         split_value(name.s);
-        read_file(dir_handle, s2w(&name), &ucode);
+        load_ok = load_file(dir_handle, s2w(&name), &ucode);
         efi_bs->FreePool(name.w);
+        if ( !load_ok )
+            blexit(L"Unable to load ucode image.");
     }
 
     name.s = get_value(&cfg, section.s, "xsm");
     if ( name.s )
     {
         split_value(name.s);
-        read_file(dir_handle, s2w(&name), &xsm);
+        load_ok = load_file(dir_handle, s2w(&name), &xsm);
         efi_bs->FreePool(name.w);
+        if ( !load_ok )
+            blexit(L"Unable to load ucode image.");
     }
 
     name.s = get_value(&cfg, section.s, "options");
