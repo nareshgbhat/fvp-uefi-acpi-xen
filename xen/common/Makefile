@@ -66,5 +66,7 @@ subdir-$(x86_64) += hvm
 
 subdir-$(coverage) += gcov
 
+subdir-$(EFI) += efi
+
 subdir-y += libelf
 subdir-$(HAS_DEVICE_TREE) += libfdt

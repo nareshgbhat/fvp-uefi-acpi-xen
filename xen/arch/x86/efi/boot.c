@@ -1,6 +1,7 @@
 #include "efi.h"
 #include <efi/efiprot.h>
 #include <efi/efipciio.h>
+#include <efi/efi-shared.h>
 #include <public/xen.h>
 #include <xen/compile.h>
 #include <xen/ctype.h>
@@ -44,25 +45,16 @@ typedef struct {
 extern char start[];
 extern u32 cpuid_ext_features;
 
-union string {
-    CHAR16 *w;
-    char *s;
-    const char *cs;
-};
 
-struct file {
-    UINTN size;
-    union {
-        EFI_PHYSICAL_ADDRESS addr;
-        void *ptr;
-    };
-};
+/* Variables supplied/used by shared EFI code. */
+extern CHAR16 __initdata newline[];
+extern EFI_BOOT_SERVICES *__initdata efi_bs;
+extern SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdOut;
+extern SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdErr;
 
-static EFI_BOOT_SERVICES *__initdata efi_bs;
+
 static EFI_HANDLE __initdata efi_ih;
 
-static SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdOut;
-static SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdErr;
 
 static UINT32 __initdata mdesc_ver;
 
@@ -77,111 +69,6 @@ static multiboot_info_t __initdata mbi = {
 };
 static module_t __initdata mb_modules[3];
 
-static CHAR16 __initdata newline[] = L"\r\n";
-
-#define PrintStr(s) StdOut->OutputString(StdOut, s)
-#define PrintErr(s) StdErr->OutputString(StdErr, s)
-
-static CHAR16 *__init FormatDec(UINT64 Val, CHAR16 *Buffer)
-{
-    if ( Val >= 10 )
-        Buffer = FormatDec(Val / 10, Buffer);
-    *Buffer = (CHAR16)(L'0' + Val % 10);
-    return Buffer + 1;
-}
-
-static CHAR16 *__init FormatHex(UINT64 Val, UINTN Width, CHAR16 *Buffer)
-{
-    if ( Width > 1 || Val >= 0x10 )
-        Buffer = FormatHex(Val >> 4, Width ? Width - 1 : 0, Buffer);
-    *Buffer = (CHAR16)((Val &= 0xf) < 10 ? L'0' + Val : L'a' + Val - 10);
-    return Buffer + 1;
-}
-
-static void __init DisplayUint(UINT64 Val, INTN Width)
-{
-    CHAR16 PrintString[32], *end;
-
-    if (Width < 0)
-        end = FormatDec(Val, PrintString);
-    else
-    {
-        PrintStr(L"0x");
-        end = FormatHex(Val, Width, PrintString);
-    }
-    *end = 0;
-    PrintStr(PrintString);
-}
-
-static CHAR16 *__init wstrcpy(CHAR16 *d, const CHAR16 *s)
-{
-    CHAR16 *r = d;
-
-    while ( (*d++ = *s++) != 0 )
-        ;
-    return r;
-}
-
-static int __init wstrcmp(const CHAR16 *s1, const CHAR16 *s2)
-{
-    while ( *s1 && *s1 == *s2 )
-    {
-        ++s1;
-        ++s2;
-    }
-    return *s1 - *s2;
-}
-
-static int __init wstrncmp(const CHAR16 *s1, const CHAR16 *s2, UINTN n)
-{
-    while ( n && *s1 && *s1 == *s2 )
-    {
-        --n;
-        ++s1;
-        ++s2;
-    }
-    return n ? *s1 - *s2 : 0;
-}
-
-static CHAR16 *__init s2w(union string *str)
-{
-    const char *s = str->s;
-    CHAR16 *w;
-    void *ptr;
-
-    if ( efi_bs->AllocatePool(EfiLoaderData, (strlen(s) + 1) * sizeof(*w),
-                              &ptr) != EFI_SUCCESS )
-        return NULL;
-
-    w = str->w = ptr;
-    do {
-        *w = *s++;
-    } while ( *w++ );
-
-    return str->w;
-}
-
-static char *__init w2s(const union string *str)
-{
-    const CHAR16 *w = str->w;
-    char *s = str->s;
-
-    do {
-        if ( *w > 0x007f )
-            return NULL;
-        *s = *w++;
-    } while ( *s++ );
-
-    return str->s;
-}
-
-static bool_t __init match_guid(const EFI_GUID *guid1, const EFI_GUID *guid2)
-{
-    return guid1->Data1 == guid2->Data1 &&
-           guid1->Data2 == guid2->Data2 &&
-           guid1->Data3 == guid2->Data3 &&
-           !memcmp(guid1->Data4, guid2->Data4, sizeof(guid1->Data4));
-}
 
 static void __init noreturn blexit(const CHAR16 *str)
 {

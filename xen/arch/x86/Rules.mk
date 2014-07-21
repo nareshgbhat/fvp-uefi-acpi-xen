@@ -13,6 +13,7 @@ HAS_EHCI := y
 HAS_KEXEC := y
 HAS_GDBSX := y
 xenoprof := y
+EFI := y
 
 #
 # If you change any of these configuration options then you must
