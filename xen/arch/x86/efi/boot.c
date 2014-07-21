@@ -744,6 +744,74 @@ static void __init relocate_image(unsigned long delta)
     }
 }
 
+
+bool_t __init handle_cmdline(EFI_LOADED_IMAGE *loaded_image,
+                           CHAR16 **cfg_file_name, bool_t *base_video,
+                           CHAR16 **image_name, CHAR16 **section_name)
+{
+
+    unsigned int i, argc;
+    CHAR16 **argv;
+
+
+    if ( !cfg_file_name || !base_video || !image_name )
+    {
+        PrintStr(L"Invalid args to handle_cmdline\r\n");
+        return 0;
+    }
+
+    argc = get_argv(0, NULL, loaded_image->LoadOptions,
+                    loaded_image->LoadOptionsSize);
+    if ( argc > 0 &&
+         efi_bs->AllocatePool(EfiLoaderData,
+                              (argc + 1) * sizeof(*argv) +
+                                  loaded_image->LoadOptionsSize,
+                              (void **)&argv) == EFI_SUCCESS )
+        get_argv(argc, argv, loaded_image->LoadOptions,
+                 loaded_image->LoadOptionsSize);
+    else
+        argc = 0;
+
+    for ( i = 1; i < argc; ++i )
+    {
+        CHAR16 *ptr = argv[i];
+
+        if ( !ptr )
+            break;
+        if ( *ptr == L'/' || *ptr == L'-' )
+        {
+            if ( wstrcmp(ptr + 1, L"basevideo") == 0 )
+                *base_video = 1;
+            else if ( wstrncmp(ptr + 1, L"cfg=", 4) == 0 )
+                *cfg_file_name = ptr + 5;
+            else if ( i + 1 < argc && wstrcmp(ptr + 1, L"cfg") == 0 )
+                *cfg_file_name = argv[++i];
+            else if ( wstrcmp(ptr + 1, L"help") == 0 ||
+                      (ptr[1] == L'?' && !ptr[2]) )
+            {
+                PrintStr(L"Xen EFI Loader options:\r\n");
+                PrintStr(L"-basevideo   retain current video mode\r\n");
+                PrintStr(L"-cfg=<file>  specify configuration file\r\n");
+                PrintStr(L"-help, -?    display this help\r\n");
+                return 0;
+            }
+            else
+            {
+                PrintStr(L"WARNING: Unknown command line option '");
+                PrintStr(ptr);
+                PrintStr(L"' ignored\r\n");
+            }
+        }
+        else
+            *section_name = ptr;
+    }
+
+    if ( argc )
+        *image_name = *argv;
+
+    return 1;
+}
+
 extern const s32 __trampoline_rel_start[], __trampoline_rel_stop[];
 extern const s32 __trampoline_seg_start[], __trampoline_seg_stop[];
 
@@ -773,8 +841,9 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     static EFI_GUID __initdata shim_lock_guid = SHIM_LOCK_PROTOCOL_GUID;
     EFI_LOADED_IMAGE *loaded_image;
     EFI_STATUS status;
-    unsigned int i, argc;
-    CHAR16 **argv, *file_name, *cfg_file_name = NULL;
+    unsigned int i;
+    CHAR16 *file_name = NULL, *cfg_file_name = NULL, *image_name = NULL;
+    CHAR16 *section_name = NULL;
     UINTN cols, rows, depth, size, map_key, info_size, gop_mode = ~0;
     EFI_HANDLE *handles = NULL;
     EFI_SHIM_LOCK_PROTOCOL *shim_lock;
@@ -814,53 +883,11 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     /* Get the file system interface. */
     dir_handle = get_parent_handle(loaded_image, &file_name);
 
-    if ( !dir_handle )
-        blexit(L"EFI get_parent_handle failed.");
+    if ( !handle_cmdline(loaded_image, &cfg_file_name, &base_video, &image_name,
+                   &section_name) )
+        blexit(NULL);
 
-    argc = get_argv(0, NULL, loaded_image->LoadOptions,
-                    loaded_image->LoadOptionsSize);
-    if ( argc > 0 &&
-         efi_bs->AllocatePool(EfiLoaderData,
-                              (argc + 1) * sizeof(*argv) +
-                                  loaded_image->LoadOptionsSize,
-                              (void **)&argv) == EFI_SUCCESS )
-        get_argv(argc, argv, loaded_image->LoadOptions,
-                 loaded_image->LoadOptionsSize);
-    else
-        argc = 0;
-    for ( i = 1; i < argc; ++i )
-    {
-        CHAR16 *ptr = argv[i];
-
-        if ( !ptr )
-            break;
-        if ( *ptr == L'/' || *ptr == L'-' )
-        {
-            if ( wstrcmp(ptr + 1, L"basevideo") == 0 )
-                base_video = 1;
-            else if ( wstrncmp(ptr + 1, L"cfg=", 4) == 0 )
-                cfg_file_name = ptr + 5;
-            else if ( i + 1 < argc && wstrcmp(ptr + 1, L"cfg") == 0 )
-                cfg_file_name = argv[++i];
-            else if ( wstrcmp(ptr + 1, L"help") == 0 ||
-                      (ptr[1] == L'?' && !ptr[2]) )
-            {
-                PrintStr(L"Xen EFI Loader options:\r\n");
-                PrintStr(L"-basevideo   retain current video mode\r\n");
-                PrintStr(L"-cfg=<file>  specify configuration file\r\n");
-                PrintStr(L"-help, -?    display this help\r\n");
-                blexit(NULL);
-            }
-            else
-            {
-                PrintStr(L"WARNING: Unknown command line option '");
-                PrintStr(ptr);
-                PrintStr(L"' ignored\r\n");
-            }
-        }
-        else
-            section.w = ptr;
-    }
+    section.w = section_name;
 
     if ( !base_video )
     {
@@ -976,9 +1003,9 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     if ( name.s )
         place_string(&mbi.cmdline, name.s);
     /* Insert image name last, as it gets prefixed to the other options. */
-    if ( argc )
+    if ( image_name )
     {
-        name.w = *argv;
+        name.w = image_name;
         w2s(&name);
     }
     else
