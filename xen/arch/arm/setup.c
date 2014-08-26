@@ -816,6 +816,8 @@ void __init start_xen(unsigned long boot_phys_offset,
     init_xen_time();
 #endif
 
+/* FIXME: Crashing here, Because it is trying to initialize GIC from DT */
+if (acpi_disabled)
     gic_init();
 
     setup_virt_paging();
