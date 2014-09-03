@@ -66,7 +66,24 @@ void __init acpi_os_vprintf(const char *fmt, va_list args)
 
 acpi_physical_address __init acpi_os_get_root_pointer(void)
 {
+       /* FIXME: The UEFI runtime support is not yet implimented.  
+        * Hence the efi structure and efi_enabled variable initialized here.
+        */
+       const bool_t efi_enabled = 1;
+
+       struct efi efi = {
+              efi.mps    = 0x00000000,
+              efi.acpi   = 0xFEBFA000,
+              efi.acpi20 = 0xFEBFA014,
+              efi.smbios = 0x00000000,
+       };
+
 	if (efi_enabled) {
+	        printk("efi.mps    : 0x%08lx\n", efi.mps);
+                printk("efi.acpi   : 0x%08lx\n", efi.acpi);
+                printk("efi.acpi20 : 0x%08lx\n", efi.acpi20);
+                printk("efi.smbios : 0x%08lx\n", efi.smbios);
+
 		if (efi.acpi20 != EFI_INVALID_TABLE_ADDR)
 			return efi.acpi20;
 		else if (efi.acpi != EFI_INVALID_TABLE_ADDR)
