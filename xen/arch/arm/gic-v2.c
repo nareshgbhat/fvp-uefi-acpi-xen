@@ -34,6 +34,7 @@
 
 #include <asm/io.h>
 #include <asm/gic.h>
+#include <asm/acpi.h>
 
 /*
  * LR register definitions are GIC v2 specific.
@@ -215,17 +216,23 @@ static void gicv2_set_irq_properties(struct irq_desc *desc,
     unsigned int irq = desc->irq;
     unsigned int type = desc->arch.type;
 
+if (acpi_disabled)
     ASSERT(type != DT_IRQ_TYPE_INVALID);
+
     ASSERT(spin_is_locked(&desc->lock));
 
     spin_lock(&gicv2.lock);
     /* Set edge / level */
     cfg = readl_gicd(GICD_ICFGR + (irq / 16) * 4);
     edgebit = 2u << (2 * (irq % 16));
+ 
+if (acpi_disabled) {
     if ( type & DT_IRQ_TYPE_LEVEL_MASK )
         cfg &= ~edgebit;
     else if ( type & DT_IRQ_TYPE_EDGE_BOTH )
         cfg |= edgebit;
+}
+
     writel_gicd(cfg, GICD_ICFGR + (irq / 16) * 4);
 
     /* Set target CPU mask (RAZ/WI on uniprocessor) */
@@ -719,7 +726,6 @@ DT_DEVICE_END
 #include <xen/acpi.h>
 #include <xen/errno.h>
 #include <xen/vmap.h>
-#include <asm/acpi.h>
 
 /*
  * Hard code here, we can not get memory size from MADT (but FDT does),
