@@ -1177,6 +1177,50 @@ static int handle_node(struct domain *d, struct kernel_info *kinfo,
     return res;
 }
 
+static int make_memory_node_acpi(const struct domain *d,
+                            void *fdt,
+                            int addr_cells,
+                            int size_cells,
+                            const struct kernel_info *kinfo)
+{
+    int res, i;
+    int reg_size = addr_cells + size_cells;
+    int nr_cells = reg_size*kinfo->mem.nr_banks;
+    __be32 reg[nr_cells];
+    __be32 *cells;
+
+    DPRINT("Create memory node (reg size %d, nr cells %d)\n", reg_size, nr_cells);
+
+    /* ePAPR 3.4 */
+    res = fdt_begin_node(fdt, "memory");
+    if ( res )
+        return res;
+
+    res = fdt_property_string(fdt, "device_type", "memory");
+    if ( res )
+        return res;
+
+    cells = &reg[0];
+    for ( i = 0 ; i < kinfo->mem.nr_banks; i++ )
+    {
+        u64 start = kinfo->mem.bank[i].start;
+        u64 size = kinfo->mem.bank[i].size;
+
+        DPRINT("  Bank %d: %#"PRIx64"->%#"PRIx64"\n",
+                i, start, start + size);
+
+        dt_set_range(&cells, fdt, start, size);
+    }
+
+    res = fdt_property(fdt, "reg", reg, sizeof(reg));
+    if ( res )
+        return res;
+
+    res = fdt_end_node(fdt);
+
+    return res;
+}
+
 static int make_chosen_node(const struct domain *d, void *fdt)
 {
    const char bootargs[] = "console=hvc0 earlycon=pl011,0x1c090000";
@@ -1249,6 +1293,10 @@ static int prepare_dtb_acpi(struct domain *d, struct kernel_info *kinfo)
 
     /* Create a chosen node for DOM0 */
     ret = make_chosen_node(d, kinfo->fdt);
+    if ( ret )
+        goto err;
+
+    ret = make_memory_node_acpi(d, kinfo->fdt, 2, 1, kinfo);
     if ( ret )
         goto err;
 
