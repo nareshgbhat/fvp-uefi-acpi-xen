@@ -1177,6 +1177,35 @@ static int handle_node(struct domain *d, struct kernel_info *kinfo,
     return res;
 }
 
+static int make_chosen_node(const struct domain *d, void *fdt)
+{
+   const char bootargs[] = "console=hvc0 earlycon=pl011,0x1c090000";
+   int res = 0;
+   u64 a = 0;
+
+   DPRINT("Create bootargs chosen node\n");
+
+   res = fdt_begin_node(fdt, "chosen");
+   if ( res )
+       return res;
+
+   res = fdt_property(fdt, "bootargs", bootargs, sizeof(bootargs));
+   if ( res )
+      return res;
+
+   res = fdt_property(fdt, "linux,initrd-start", &a, sizeof(a));
+   if ( res )
+       return res;
+
+   res = fdt_property(fdt, "linux,initrd-end", &a, sizeof(a));
+   if ( res )
+       return res;
+
+    res = fdt_end_node(fdt);
+
+    return res;
+}
+
 /* 
  * Prepare a minimal DTB for DOM0 which contains 
  * bootargs, memory information,
@@ -1217,6 +1246,11 @@ static int prepare_dtb_acpi(struct domain *d, struct kernel_info *kinfo)
     ret = fdt_property_cell(kinfo->fdt, "#size-cells", 1);
     if ( ret )
         return ret;
+
+    /* Create a chosen node for DOM0 */
+    ret = make_chosen_node(d, kinfo->fdt);
+    if ( ret )
+        goto err;
 
     ret = fdt_end_node(kinfo->fdt);
     if ( ret < 0 )
