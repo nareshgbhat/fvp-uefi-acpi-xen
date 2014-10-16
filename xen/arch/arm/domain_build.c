@@ -17,6 +17,7 @@
 #include <asm/platform.h>
 #include <asm/psci.h>
 #include <asm/setup.h>
+#include <asm/acpi.h>
 
 #include <asm/gic.h>
 #include <xen/irq.h>
@@ -59,6 +60,9 @@ custom_param("dom0_mem", parse_dom0_mem);
  * added.
  */
 #define DOM0_FDT_EXTRA_SIZE (128 + sizeof(struct fdt_reserve_entry))
+
+/* Reserve DOM0 FDT size in ACPI case only */
+#define DOM0_FDT_MIN_SIZE 4096
 
 struct vcpu *__init alloc_dom0_vcpu0(struct domain *dom0)
 {
@@ -1173,6 +1177,63 @@ static int handle_node(struct domain *d, struct kernel_info *kinfo,
     return res;
 }
 
+/* 
+ * Prepare a minimal DTB for DOM0 which contains 
+ * bootargs, memory information,
+ * ACPI RSDP pointer.
+ */
+static int prepare_dtb_acpi(struct domain *d, struct kernel_info *kinfo)
+{
+    int new_size;
+    int ret;
+
+    DPRINT("Prepare a min DTB for DOM0\n");
+
+    /* Allocate min size for DT */
+    new_size = DOM0_FDT_MIN_SIZE;
+    kinfo->fdt = xmalloc_bytes(DOM0_FDT_MIN_SIZE);
+
+    if ( kinfo->fdt == NULL )
+        return -ENOMEM;
+
+    /* Create a new empty DT for DOM0 */
+    ret = fdt_create(kinfo->fdt, new_size);
+    if ( ret < 0 )
+        goto err;
+
+    /* Reserve the memory space for new DT */
+    ret = fdt_finish_reservemap(kinfo->fdt);
+    if ( ret < 0 )
+        goto err;
+
+    ret = fdt_begin_node(kinfo->fdt, "/");
+    if ( ret < 0 )
+        goto err;
+
+    ret = fdt_property_cell(kinfo->fdt, "#address-cells", 2);
+    if ( ret )
+        return ret;
+
+    ret = fdt_property_cell(kinfo->fdt, "#size-cells", 1);
+    if ( ret )
+        return ret;
+
+    ret = fdt_end_node(kinfo->fdt);
+    if ( ret < 0 )
+        goto err;
+
+    ret = fdt_finish(kinfo->fdt);
+    if ( ret < 0 )
+        goto err;
+
+    return 0;
+
+  err:
+    printk("Device tree generation failed (%d).\n", ret);
+    xfree(kinfo->fdt);
+    return -EINVAL;
+}
+
 static int prepare_dtb(struct domain *d, struct kernel_info *kinfo)
 {
     const void *fdt;
@@ -1321,7 +1382,11 @@ int construct_dom0(struct domain *d)
 
     allocate_memory(d, &kinfo);
 
+if (acpi_disabled)
     rc = prepare_dtb(d, &kinfo);
+else
+    rc = prepare_dtb_acpi(d, &kinfo);
+
     if ( rc < 0 )
         return rc;
 
