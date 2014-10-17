@@ -15,6 +15,10 @@ struct kernel_info {
     enum domain_type type;
 #endif
 
+#if defined(CONFIG_ARM_64) && defined(CONFIG_ACPI)
+    u64 acpi20;     /* ACPI table (ACPI 2.0) */
+#endif
+
     void *fdt; /* flat device tree */
     paddr_t unassigned_mem; /* RAM not (yet) assigned to a bank */
     struct meminfo mem;

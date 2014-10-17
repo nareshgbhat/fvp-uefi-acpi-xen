@@ -1177,6 +1177,28 @@ static int handle_node(struct domain *d, struct kernel_info *kinfo,
     return res;
 }
 
+/* Create a ACPI RSDP node */
+static int make_rsdp_node(const struct domain *d, void *fdt)
+{
+   int res;
+   const char acpi20[] = "0xfebfa014";
+
+   DPRINT("Create ACPI RSDP chosen node\n");
+
+   res = fdt_begin_node(fdt, "rsdp");
+   if ( res )
+       return res;
+
+   res = fdt_property(fdt, "rsdp", acpi20, sizeof(acpi20));
+   if ( res )
+       return res;
+
+   res = fdt_end_node(fdt);
+
+   return res;
+
+}
+
 static int make_memory_node_acpi(const struct domain *d,
                             void *fdt,
                             int addr_cells,
@@ -1250,6 +1272,14 @@ static int make_chosen_node(const struct domain *d, void *fdt)
     return res;
 }
 
+static int prepare_acpi_rsdp(struct domain *d, struct kernel_info *kinfo)
+{
+   DPRINT("Prepare RSDP for DOM0\n");
+
+   kinfo->acpi20 = 0xfebfa014;
+
+   return 0;
+}
 /* 
  * Prepare a minimal DTB for DOM0 which contains 
  * bootargs, memory information,
@@ -1297,6 +1327,10 @@ static int prepare_dtb_acpi(struct domain *d, struct kernel_info *kinfo)
         goto err;
 
     ret = make_memory_node_acpi(d, kinfo->fdt, 2, 1, kinfo);
+    if ( ret )
+        goto err;
+
+    ret = make_rsdp_node(d, kinfo->fdt);
     if ( ret )
         goto err;
 
@@ -1463,6 +1497,8 @@ int construct_dom0(struct domain *d)
 #endif
 
     allocate_memory(d, &kinfo);
+
+    prepare_acpi_rsdp(d, &kinfo);
 
 if (acpi_disabled)
     rc = prepare_dtb(d, &kinfo);
